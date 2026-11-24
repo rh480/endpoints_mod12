@@ -39,6 +39,14 @@ def read_health():
 # ------------------------------------------------------------------------------
 # User Registration Endpoint
 # ------------------------------------------------------------------------------
+
+@app.post(
+    "/users/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["users"]
+)
+
 @app.post(
     "/auth/register", 
     response_model=UserResponse, 
@@ -60,6 +68,7 @@ def register(user_create: UserCreate, db: Session = Depends(get_db)):
 # ------------------------------------------------------------------------------
 # User Login Endpoints
 # ------------------------------------------------------------------------------
+@app.post("/users/login", response_model=TokenResponse, tags=["users"])
 @app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
 def login_json(user_login: UserLogin, db: Session = Depends(get_db)):
     """Login with JSON payload"""
@@ -200,12 +209,15 @@ def update_calculation(
     ).first()
     if not calculation:
         raise HTTPException(status_code=404, detail="Calculation not found.")
-
-    if calculation_update.inputs is not None:
-        calculation.inputs = calculation_update.inputs
-        calculation.result = calculation.get_result()
-    calculation.updated_at = datetime.utcnow()
-    db.commit()
+    try:
+        if calculation_update.inputs is not None:
+            calculation.inputs = calculation_update.inputs
+            calculation.result = calculation.get_result()
+        calculation.updated_at = datetime.utcnow()
+        db.commit()
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     db.refresh(calculation)
     return calculation
 
