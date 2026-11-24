@@ -1,5 +1,7 @@
 import pytest
 import uuid
+from fastapi.testclient import TestClient
+from app.main import app
 
 from app.models.calculation import (
     Calculation,
@@ -150,3 +152,159 @@ def test_invalid_inputs_for_division():
     division = Division(user_id=dummy_user_id(), inputs=[10])
     with pytest.raises(ValueError, match="Inputs must be a list with at least two numbers."):
         division.get_result()
+
+# ======================================================================================
+# Endpoint tests: calculation BREAD (Browse, Read, Edit, Add, Delete)
+# ======================================================================================
+@pytest.fixture
+def api_client():
+    return TestClient(app)
+
+
+@pytest.fixture
+def api_user_payload():
+    """A valid registration payload with a unique username/email for every test."""
+    suffix = uuid.uuid4().hex[:12]
+    return {
+        "first_name": "Test",
+        "last_name": "User",
+        "email": f"user_{suffix}@example.com",
+        "username": f"user_{suffix}",
+        "password": "SecurePass123!",
+        "confirm_password": "SecurePass123!",
+    }
+
+
+@pytest.fixture
+def auth_headers(api_client, api_user_payload):
+    """Register + log in a new user and return the Authorization header."""
+    assert api_client.post("/users/register", json=api_user_payload).status_code == 201
+    login = api_client.post(
+        "/users/login",
+        json={"username": api_user_payload["username"], "password": api_user_payload["password"]},
+    )
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+def _get_calc(db_session, calc_id):
+    db_session.expire_all()
+    return db_session.query(Calculation).filter(Calculation.id == uuid.UUID(calc_id)).first()
+
+
+@pytest.mark.parametrize(
+    "calc_type, inputs, expected",
+    [
+        ("addition", [10.5, 3, 2], 15.5),
+        ("subtraction", [10, 3, 2], 5),
+        ("multiplication", [2, 3, 4], 24),
+        ("division", [100, 2, 5], 10),
+    ],
+)
+def test_endpoint_add_calculation(api_client, db_session, auth_headers, calc_type, inputs, expected):
+    response = api_client.post(
+        "/calculations", json={"type": calc_type, "inputs": inputs}, headers=auth_headers
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["type"] == calc_type
+    assert body["result"] == pytest.approx(expected)
+
+    row = _get_calc(db_session, body["id"])  # verify it was saved
+    assert row is not None
+    assert row.result == pytest.approx(expected)
+
+
+def test_endpoint_browse_read_edit_delete(api_client, db_session, auth_headers):
+    # Add
+    created = api_client.post(
+        "/calculations", json={"type": "multiplication", "inputs": [3, 4]}, headers=auth_headers
+    ).json()
+    calc_id = created["id"]
+    assert created["result"] == 12
+
+    # Browse
+    listing = api_client.get("/calculations", headers=auth_headers)
+    assert listing.status_code == 200
+    assert calc_id in [c["id"] for c in listing.json()]
+
+    # Read
+    read = api_client.get(f"/calculations/{calc_id}", headers=auth_headers)
+    assert read.status_code == 200
+    assert read.json()["inputs"] == [3, 4]
+
+    # Edit
+    edit = api_client.put(f"/calculations/{calc_id}", json={"inputs": [5, 6]}, headers=auth_headers)
+    assert edit.status_code == 200
+    assert edit.json()["result"] == 30
+    assert _get_calc(db_session, calc_id).result == 30
+
+    # Delete
+    delete = api_client.delete(f"/calculations/{calc_id}", headers=auth_headers)
+    assert delete.status_code == 204
+    assert _get_calc(db_session, calc_id) is None
+    assert api_client.get(f"/calculations/{calc_id}", headers=auth_headers).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "power", "inputs": [2, 3]},          # unsupported type
+        {"type": "addition", "inputs": [1]},          # fewer than two inputs
+        {"type": "addition", "inputs": "1,2"},        # inputs is not a list
+        {"type": "addition", "inputs": [1, "abc"]},   # non-numeric input
+        {"type": "division", "inputs": [10, 0]},      # division by zero
+        {"type": "addition"},                         # missing inputs
+        {},                                           # empty body
+    ],
+    ids=["bad-type", "one-input", "not-a-list", "non-numeric", "divide-by-zero", "missing-inputs", "empty"],
+)
+def test_endpoint_add_invalid_data_returns_422(api_client, auth_headers, payload):
+    response = api_client.post("/calculations", json=payload, headers=auth_headers)
+    assert response.status_code == 422
+
+
+def test_endpoint_edit_invalid_inputs_returns_422(api_client, auth_headers):
+    created = api_client.post(
+        "/calculations", json={"type": "addition", "inputs": [1, 2]}, headers=auth_headers
+    ).json()
+
+    response = api_client.put(
+        f"/calculations/{created['id']}", json={"inputs": [1]}, headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+def test_endpoint_edit_division_by_zero_returns_400(api_client, db_session, auth_headers):
+    created = api_client.post(
+        "/calculations", json={"type": "division", "inputs": [100, 5]}, headers=auth_headers
+    ).json()
+
+    response = api_client.put(
+        f"/calculations/{created['id']}", json={"inputs": [10, 0]}, headers=auth_headers
+    )
+
+    assert response.status_code == 400
+    assert _get_calc(db_session, created["id"]).inputs == [100, 5]  # unchanged
+
+
+def test_endpoint_unknown_calculation_returns_404(api_client, auth_headers):
+    missing = uuid.uuid4()
+    assert api_client.get(f"/calculations/{missing}", headers=auth_headers).status_code == 404
+    assert api_client.put(f"/calculations/{missing}", json={"inputs": [1, 2]}, headers=auth_headers).status_code == 404
+    assert api_client.delete(f"/calculations/{missing}", headers=auth_headers).status_code == 404
+
+
+def test_endpoint_malformed_calculation_id_returns_400(api_client, auth_headers):
+    assert api_client.get("/calculations/not-a-uuid", headers=auth_headers).status_code == 400
+
+
+def test_endpoint_calculations_require_login(api_client):
+    some_id = uuid.uuid4()
+    assert api_client.get("/calculations").status_code == 401
+    assert api_client.post("/calculations", json={"type": "addition", "inputs": [1, 2]}).status_code == 401
+    assert api_client.get(f"/calculations/{some_id}").status_code == 401
+    assert api_client.put(f"/calculations/{some_id}", json={"inputs": [1, 2]}).status_code == 401
+    assert api_client.delete(f"/calculations/{some_id}").status_code == 401

@@ -5,6 +5,9 @@ from uuid import UUID
 import pydantic_core
 from sqlalchemy.exc import IntegrityError
 from app.models.user import User
+import uuid
+from fastapi.testclient import TestClient
+from app.main import app
 
 def test_password_hashing(db_session, fake_user_data):
     """Test password hashing and verification functionality"""
@@ -194,3 +197,115 @@ def test_missing_password_registration(db_session):
     # Adjust the expected error message
     with pytest.raises(ValueError, match="Password must be at least 6 characters long"):
         User.register(db_session, test_data)
+
+
+# ======================================================================================
+# Endpoint tests: POST /users/register and POST /users/login
+# ======================================================================================
+@pytest.fixture
+def api_client():
+    return TestClient(app)
+
+
+@pytest.fixture
+def api_user_payload():
+    """A valid registration payload with a unique username/email for every test."""
+    suffix = uuid.uuid4().hex[:12]
+    return {
+        "first_name": "Test",
+        "last_name": "User",
+        "email": f"user_{suffix}@example.com",
+        "username": f"user_{suffix}",
+        "password": "SecurePass123!",
+        "confirm_password": "SecurePass123!",
+    }
+
+
+def _get_user_by_username(db_session, username):
+    db_session.expire_all()
+    return db_session.query(User).filter(User.username == username).first()
+
+
+def test_endpoint_register_creates_user_with_hashed_password(api_client, db_session, api_user_payload):
+    response = api_client.post("/users/register", json=api_user_payload)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["username"] == api_user_payload["username"]
+    assert body["email"] == api_user_payload["email"]
+    assert body["is_active"] is True
+    assert "password" not in body  # never returned
+
+    # Verify the data in the database: the row exists and the password is hashed
+    user = _get_user_by_username(db_session, api_user_payload["username"])
+    assert user is not None
+    assert str(user.id) == body["id"]
+    assert user.password != api_user_payload["password"]
+    assert user.verify_password(api_user_payload["password"]) is True
+
+
+def test_endpoint_register_duplicate_user_returns_400(api_client, api_user_payload):
+    assert api_client.post("/users/register", json=api_user_payload).status_code == 201
+
+    response = api_client.post("/users/register", json=api_user_payload)
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"confirm_password": "SecurePass123?"},                              # passwords differ
+        {"password": "weakpass", "confirm_password": "weakpass"},            # weak password
+        {"email": "not-an-email"},                                           # invalid email
+        {"username": "ab"},                                                  # username too short
+    ],
+    ids=["password-mismatch", "weak-password", "invalid-email", "short-username"],
+)
+def test_endpoint_register_invalid_data_returns_422(api_client, db_session, api_user_payload, changes):
+    api_user_payload.update(changes)
+
+    response = api_client.post("/users/register", json=api_user_payload)
+
+    assert response.status_code == 422
+    assert _get_user_by_username(db_session, api_user_payload["username"]) is None  # nothing saved
+
+
+def test_endpoint_login_success_returns_tokens(api_client, db_session, api_user_payload):
+    api_client.post("/users/register", json=api_user_payload)
+
+    response = api_client.post(
+        "/users/login",
+        json={"username": api_user_payload["username"], "password": api_user_payload["password"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert body["access_token"] and body["refresh_token"]
+    assert body["username"] == api_user_payload["username"]
+    assert _get_user_by_username(db_session, api_user_payload["username"]).last_login is not None
+
+
+def test_endpoint_login_wrong_password_returns_401(api_client, api_user_payload):
+    api_client.post("/users/register", json=api_user_payload)
+
+    response = api_client.post(
+        "/users/login",
+        json={"username": api_user_payload["username"], "password": "WrongPass123!"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_endpoint_login_unknown_user_returns_401(api_client):
+    response = api_client.post(
+        "/users/login", json={"username": "no_such_user", "password": "SecurePass123!"}
+    )
+    assert response.status_code == 401
+
+
+def test_endpoint_login_invalid_payload_returns_422(api_client):
+    response = api_client.post("/users/login", json={"username": "someuser"})  # no password
+    assert response.status_code == 422
