@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:latest
@@ -23,14 +23,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+    env:
+        DATABASE_URL: postgresql://user:password@localhost:5432/mytestdb    
+  
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
           
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -38,23 +41,22 @@ jobs:
             ${{ runner.os }}-pip-
       
       - name: Install dependencies
-        env:
-          DATABASE_URL: postgresql://user:password@localhost:5432/mytestdb
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
+          AIREDIS_DIR=$(find venv/lib -type d -name aioredis -print -quit)
+          sed -i 's/asyncio.TimeoutError, builtins.TimeoutError, RedisError/asyncio.TimeoutError, RedisError/' "$AIREDIS_DIR/exceptions.py"
+          sed -i 's/from distutils.version import StrictVersion/from packaging.version import Version as StrictVersion/' "$AIREDIS_DIR/connection.py"          
           playwright install  # if you use Playwright for e2e tests
       
       - name: Run tests
-        env:
-          DATABASE_URL: postgresql://user:password@localhost:5432/mytestdb
         run: |
           source venv/bin/activate
           
           # 1) Unit tests
-          pytest tests/unit/ --cov=src --junitxml=test-results/junit.xml
+          pytest tests/unit/ --cov=app --junitxml=test-results/junit.xml
           
           # 2) Integration tests
           pytest tests/integration/
@@ -64,7 +66,7 @@ jobs:
 
   security:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       
