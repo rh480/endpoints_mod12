@@ -3,7 +3,9 @@ from pydantic import ValidationError
 from uuid import uuid4
 from datetime import datetime
 from app.schemas.calculation import (
+    CalculationBase,
     CalculationCreate,
+    CalculationType,
     CalculationUpdate,
     CalculationResponse
 )
@@ -97,3 +99,20 @@ def test_calculation_response_valid():
     assert calc_response.type == "subtraction"
     assert calc_response.inputs == [20, 5]
     assert calc_response.result == 15.5
+
+
+
+# ======================================================================================
+# Coverage: defensive length checks in the model validators
+# ======================================================================================
+def test_calculation_base_validator_rejects_short_inputs_when_called_directly():
+    # Field(min_items=2) normally rejects this first, so call the validator itself.
+    calculation = CalculationBase.model_construct(type=CalculationType.ADDITION, inputs=[1])
+    with pytest.raises(ValueError, match="At least two numbers"):
+        calculation.validate_inputs()
+
+
+def test_calculation_update_validator_rejects_short_inputs_when_called_directly():
+    update = CalculationUpdate.model_construct(inputs=[1])
+    with pytest.raises(ValueError, match="At least two numbers"):
+        update.validate_inputs()

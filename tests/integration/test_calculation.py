@@ -2,6 +2,7 @@ import pytest
 import uuid
 from fastapi.testclient import TestClient
 from app.main import app
+from unittest.mock import patch
 
 from app.models.calculation import (
     Calculation,
@@ -153,9 +154,8 @@ def test_invalid_inputs_for_division():
     with pytest.raises(ValueError, match="Inputs must be a list with at least two numbers."):
         division.get_result()
 
-# ======================================================================================
+
 # Endpoint tests: calculation BREAD (Browse, Read, Edit, Add, Delete)
-# ======================================================================================
 @pytest.fixture
 def api_client():
     return TestClient(app)
@@ -308,3 +308,45 @@ def test_endpoint_calculations_require_login(api_client):
     assert api_client.get(f"/calculations/{some_id}").status_code == 401
     assert api_client.put(f"/calculations/{some_id}", json={"inputs": [1, 2]}).status_code == 401
     assert api_client.delete(f"/calculations/{some_id}").status_code == 401
+
+# Coverage: app/models/calculation.py
+def test_base_calculation_get_result_not_implemented():
+    calculation = Calculation(user_id=dummy_user_id(), inputs=[1, 2])
+    with pytest.raises(NotImplementedError):
+        calculation.get_result()
+
+
+def test_calculation_repr_shows_type_and_inputs():
+    text = repr(Addition(user_id=dummy_user_id(), inputs=[1, 2]))
+    assert text.startswith("<Calculation(type=")
+    assert "inputs=[1, 2]" in text
+
+
+@pytest.mark.parametrize("calc_class", [Addition, Subtraction, Multiplication, Division])
+@pytest.mark.parametrize(
+    "bad_inputs, message",
+    [("not a list", "a list of numbers"), ([1], "at least two numbers")],
+    ids=["not-a-list", "too-few-inputs"],
+)
+def test_get_result_rejects_invalid_inputs(calc_class, bad_inputs, message):
+    calculation = calc_class(user_id=dummy_user_id(), inputs=bad_inputs)
+    with pytest.raises(ValueError, match=message):
+        calculation.get_result()
+
+# Coverage: app/main.py calculation endpoints
+def test_endpoint_add_calculation_value_error_returns_400(api_client, auth_headers):
+    with patch.object(Calculation, "create", side_effect=ValueError("Unsupported calculation type: boom")):
+        response = api_client.post(
+            "/calculations", json={"type": "addition", "inputs": [1, 2]}, headers=auth_headers
+        )
+
+    assert response.status_code == 400
+    assert "boom" in response.json()["detail"]
+
+
+def test_endpoint_edit_and_delete_malformed_id_return_400(api_client, auth_headers):
+    put = api_client.put("/calculations/not-a-uuid", json={"inputs": [1, 2]}, headers=auth_headers)
+    delete = api_client.delete("/calculations/not-a-uuid", headers=auth_headers)
+
+    assert put.status_code == 400
+    assert delete.status_code == 400

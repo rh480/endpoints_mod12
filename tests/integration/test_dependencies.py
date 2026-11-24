@@ -103,3 +103,26 @@ def test_get_current_active_user_inactive(mock_verify_token):
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert exc_info.value.detail == "Inactive user"
+
+# Test get_current_user with a minimal payload that only has a 'sub' key
+def test_get_current_user_minimal_sub_payload(mock_verify_token):
+    user_id = uuid4()
+    mock_verify_token.return_value = {"sub": str(user_id)}
+
+    user_response = get_current_user(token="validtoken")
+
+    assert isinstance(user_response, UserResponse)
+    assert user_response.id == user_id
+    assert user_response.username == "unknown"
+    assert user_response.is_active is True
+    assert user_response.is_verified is False
+
+# Test get_current_user when verify_token returns an unsupported type
+def test_get_current_user_unsupported_token_data_type(mock_verify_token):
+    mock_verify_token.return_value = "not-a-dict-or-uuid"
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_user(token="validtoken")
+
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail == "Could not validate credentials"
