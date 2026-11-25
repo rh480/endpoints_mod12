@@ -21,7 +21,8 @@ Screenshots:
 
 # Reflection
 
-(in progress)
+This module focused on connecting endpoints based on what we did in previous modules. The earlier modules focused on how the data is stored and the schemas for how the data is checked. This module connected the API endpoints so the app can be used over the internet. The lecture video mentioned that APIs act as a guard for the database. Each request is first checked, then the application runs, and then a response is sent back with a status code. The status codes can vary depending on what happened. I added the login and registration endpoints and made sure error cases such as divide by zero return a clear error message and don't crash the application. Implementing them was a little difficult because the application had two login routes, one for JSON and the other one for form data. I ended up putting the route on the wrong one and was confused by the error messages. I ended up figuring it out by reading the code and errors more carefully. I also added all the tests I saw were missing to make sure everything ran smoothly on GitHub actions. I did run into some issues with older versions of packages, so I made sure those were updated so everything ran properly. Once everything was complete, I followed the steps to test that the endpoints were working and made sure there weren’t any issues. 
+
 
 # 📦 Project Setup
 
