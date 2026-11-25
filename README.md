@@ -1,3 +1,28 @@
+# Module 12
+
+GitHub URL:
+https://github.com/rh480/endpoints_mod12
+
+
+Dockerhub URL: 
+https://hub.docker.com/repository/docker/rh48/601_module12/general
+
+Screenshots:
+
+![GitHub Actions](/Screenshots/Mod12GitHubActions.png)
+
+![Running Application Register](/Screenshots/Mod12SSRegister.png)
+
+
+![Running Application Login](Screenshots/Mod12SSLogin.png)
+
+![Running Application Calculation](Screenshots/Mod12CalcSS1.png)
+
+
+# Reflection
+
+(in progress)
+
 # 📦 Project Setup
 
 ---
